@@ -1,0 +1,235 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <sqlenv.h>
+#include <sqlcodes.h>
+#include <sqlca.h>
+#include <sqlutil.h>
+
+#include "utils.h"
+
+EXEC SQL INCLUDE SQLCA;
+
+FILE * logfile = NULL;
+
+#ifndef _PREFIX
+#   define PREFIX "privacy"
+#else
+#   define PREFIX M_STR(_PREFIX)
+#endif
+
+#define check_error(n) if (SQLCODE < 0) { \
+    sqlaintp(msg, 1024, 0, &sqlca); \
+    if (logfile) fprintf(logfile, "dbutils [ERROR] msg: %s", msg); \
+    return n; \
+}
+
+int open_db() {
+EXEC SQL BEGIN DECLARE SECTION;
+    char db_name[64];
+    char db_user[64];
+    char db_pass[64];
+    char db_schema[64];
+EXEC SQL END DECLARE SECTION;
+
+    char msg[1024];
+    int ret = 0;
+    if ((ret = get_dbconfig(db_name, db_user, db_pass, db_schema)))
+        return ret;
+
+EXEC SQL CONNECT TO :db_name USER :db_user USING :db_pass;
+    check_error(ERROR_DBCONN);
+
+EXEC SQL SET SCHEMA :db_schema;
+    check_error(ERROR_DBCONN);
+
+    return 0;
+}
+
+int close_db() {
+EXEC SQL CONNECT RESET;
+    return 0;
+}
+
+int lookup_policy_in_db(int policy, char * algo, char * key) {
+EXEC SQL BEGIN DECLARE SECTION;
+    char sql_p[1024];
+    char algo_name_p[64];
+    char pkey[1024] = "";
+    sqlint32 p = policy;
+EXEC SQL END DECLARE SECTION;
+
+    char msg[1024];
+    snprintf(sql_p, 1023,
+        " SELECT b.ALGO_FUN_NAME, a.PRIVATE_KEY"
+        " FROM PRIVACY_PROCESS_POLICY a"
+        " INNER JOIN PRIVACY_ENCODE_ALGO_MANAGE b"
+        " ON (a.ALGO_ID = b.ALGO_ID)"
+        " WHERE a.POLICY_VERSION = ?");
+
+EXEC SQL PREPARE st_p FROM :sql_p;
+    check_error(ERROR_NOKEY);
+EXEC SQL DECLARE c_p CURSOR FOR st_p;
+    check_error(ERROR_NOKEY);
+EXEC SQL OPEN c_p USING :p;
+    check_error(ERROR_NOKEY);
+EXEC SQL FETCH c_p INTO :algo_name_p, :pkey;
+    check_error(ERROR_NOKEY);
+EXEC SQL CLOSE c_p;
+
+    strcpy(key, pkey);
+    strcpy(algo, algo_name_p);
+    return 0;
+}
+
+int lookup_colid_in_db(const char * colid,
+    char * a, char * m, char * k, int * v, int * t) {
+
+EXEC SQL BEGIN DECLARE SECTION;
+    sqlint32 version;
+    char algo_name_c[64] = "";
+    char key[1024]       = "";
+    char sql_c[1024]     = "";
+    char cid[64]         = "";
+    char md5[64]         = "";
+    sqlint32 type, status;
+EXEC SQL END DECLARE SECTION;
+
+    char msg[1024];
+    snprintf(sql_c, 1023,
+        " SELECT"
+        "     b.PRIVATE_KEY,"
+        "     c.ALGO_FUN_NAME,"
+        "     c.ALGO_MD5_CHECKSUM,"
+        "     b.POLICY_VERSION,"
+        "     a.COLUMN_DATA_TYPE,"
+        "     a.CUR_STATUS"
+        " FROM"
+        "            PRIVACY_PROTECT_COLUMN a"
+        " INNER JOIN PRIVACY_PROCESS_POLICY b"
+        "         ON (a.ALGO_ID = b.ALGO_ID)"
+        " INNER JOIN PRIVACY_ENCODE_ALGO_MANAGE c"
+        "         ON (b.ALGO_ID = c.ALGO_ID)"
+        " WHERE 1 = 1"
+        "     AND b.START_TIME < CURRENT TIMESTAMP"
+        "     AND b.START_TIME is NOT NULL"
+        "     AND b.END_TIME is NULL"
+        "     AND a.COLUMN_ID = ?"
+        " ORDER BY b.POLICY_VERSION DESC"
+        " FETCH FIRST 1 ROW ONLY");
+
+    strcpy(cid, colid);
+
+EXEC SQL PREPARE st_c FROM :sql_c;
+    check_error(ERROR_NOKEY);
+EXEC SQL DECLARE c_c CURSOR FOR st_c;
+    check_error(ERROR_NOKEY);
+EXEC SQL OPEN c_c USING :cid;
+    check_error(ERROR_NOKEY);
+EXEC SQL FETCH c_c INTO :key, :algo_name_c, :md5, :version, :type, :status;
+    check_error(ERROR_NOKEY);
+EXEC SQL CLOSE c_c;
+
+    static const int E[] = {0, ERROR_DELETE, ERROR_UPDATING};
+    if (status) return E[status];
+
+    strcpy(k, key);
+    strcpy(a, algo_name_c);
+    strncpy(m, md5, 32);
+    *t = type;
+    *v = version;
+    return 0;
+}
+
+static int update_column_status(const char * colid, int status) {
+EXEC SQL BEGIN DECLARE SECTION;
+    char     sql_u[1024] = "";
+    char     cid_u[64]   = "";
+    sqlint32 st          = 0;
+EXEC SQL END DECLARE SECTION;
+
+    char msg[1024];
+
+    snprintf(sql_u, 1024,
+        " UPDATE PRIVACY_PROTECT_COLUMN a"
+        " SET a.CUR_STATUS = ?"
+        " WHERE a.COLUMN_ID = ?");
+
+    strcpy(cid_u, colid);
+    st = status;
+
+EXEC SQL PREPARE st_u FROM :sql_u;
+    check_error(ERROR_UPDATE_STATUS);
+EXEC SQL EXECUTE st_u USING :st, :cid_u;
+    check_error(ERROR_UPDATE_STATUS);
+EXEC SQL COMMIT;
+    return 0;
+}
+
+#define die(n) do { \
+    errcode = n; \
+    goto error; \
+} while (0)
+
+int main(int argc, char *argv[]) {
+    int ret = 0, errcode = 0;
+    char buf[1024];
+	sprintf(buf, "%s/%s/privacyprot.log", getenv("HOME"), PREFIX); // linux
+	/*sprintf(buf, "%s/%s/privacyprot.log", getenv("HOME")==NULL?"C:":getenv("HOME"), PREFIX); // windows*/
+    logfile = fopen(buf, "a+");
+
+    if (getenv("TERM")) die(ERROR_DBUTILS_SHELL);
+    if (argc < 3) die(ERROR_DBUTILS_PARAM);
+    if ((ret = open_db())) die(ret);
+
+    char key[1024] =  "";
+    char algo[MAXLEN_ALGONAME] = "";
+    char md5[64] = "";
+    int policy;
+    int type;
+
+    ret = 0;
+
+    if (0 == strcasecmp(argv[1], "policy")) {
+        policy = atoi(argv[2]);
+        if ((ret = lookup_policy_in_db(policy, algo, key))) die(ret);
+        if (key[0]) {
+            printf("OK\n");
+            printf("%s\n", algo);
+            printf("%s\n", key);
+        } else {
+            die(ERROR_NOKEY);
+        }
+    } else if (0 == strcasecmp(argv[1], "colid")) {
+        if ((ret = lookup_colid_in_db(argv[2], algo, md5, key, &policy, &type)))
+            die(ret);
+        if (key[0]) {
+            printf("OK\n");
+            printf("%s\n", algo);
+            printf("%s\n", md5);
+            printf("%s\n", key);
+            printf("%d\n", policy);
+            printf("%d\n", type);
+        } else {
+            die(ERROR_NOKEY);
+        }
+    } else if (0 == strcasecmp(argv[1], "update")) {
+        if ((ret == update_column_status(argv[2], atoi(argv[3])))) die(ret);
+        printf("OK\n");
+    } else {
+        die(ERROR_DBUTILS_PARAM);
+    }
+
+error:
+    close_db();
+    if (logfile) fclose(logfile);
+    if (errcode) {
+        printf("Error\n");
+        printf("%d\n", errcode);
+        printf("%s\n", errmsg[errcode]);
+    }
+    return errcode;
+}
+
+// vim: ft=c

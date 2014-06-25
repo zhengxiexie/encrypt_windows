@@ -1,0 +1,50 @@
+RNUM = $(shell echo $$RANDOM)
+LD_LIBRARY_PATH := 
+
+# Oracle
+DB_CFLAGS  = -D_ORACLE=1 -I $(INSCLIENT)/sdk/include -I $(INSCLIENT)/rdbms/public
+DB_LDFLAGS = -L $(INSCLIENT) -L $(INSCLIENT)/lib -locci -lclntsh
+
+# JNI 设置
+JNI_CLASSNAME = com.asiainfo.biframe.privacyprotection.util.DecryptContext
+JNI_CFLAGS  = -I $(JAVA_HOME)/include -I $(JAVA_HOME)/include/$(OS)
+JNI_LDFLAGS = 
+JAVAH = $(JAVA_HOME)/bin/javah -classpath $(CLASS_PATH) 
+
+# openssl
+OPENSSL_LIB += ../libcrypto.a
+CFLAGS      += -I ../openssl-1.0.1f/include
+
+CFLAGS  += $(JNI_CFLAGS)
+LDFLAGS += $(JNI_LDFLAGS)
+
+CFLAGS += -I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/$(OS)
+CFLAGS += -D_PREFIX=${prefix}
+
+DBTYPE = oracle
+
+# ====================
+# | 需要修改以下配置 |
+# ====================
+
+# 操作系统
+OS = linux
+# OS = aix
+
+# JAVA_HOME
+JAVA_HOME  = /usr/java/default
+# $(JNI_CLASSNAME) 所在路径
+CLASS_PATH = $(CLASSPATH):../lib:./lib
+
+# 数据库有关配置
+# 使用Instant client填写Inscleint目录
+# 主机有数据库环境请填写$ORACLE_HOME的值
+INSCLIENT   = /home/privacy/opt/ora64/
+prefix      = privacy
+
+# 数据库配置
+DATABASE = pp
+USERNAME = pp
+PASSWORD = pp
+SCHEMA   = pp
+

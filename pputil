@@ -1,0 +1,2 @@
+cur_dir=`dirname $0`
+exec /usr/java/default/bin/java -jar $cur_dir/aibi*.jar $* 2>>$cur_dir/privacyprot.log

@@ -1,0 +1,35 @@
+
+ARCH = 32
+
+CC      = gcc
+CFLAGS  = -O2 -m$(ARCH) -D_REENTREANT -Wall -D_PREFIX="privacy"
+LDFLAGS = -m$(ARCH)
+PIC     =
+SHARED  = -shared
+
+OS = win32
+JAVA_HOME  = ../java
+
+CFLAGS  += -I $(JAVA_HOME)/include -I $(JAVA_HOME)/include/$(OS)
+LDFLAGS += -Wl,--add-stdcall-alias
+
+objects_jni  := jni.o utils.o error.o decrypt-win.o
+
+.PHONY: all clean jni
+
+all: jni
+
+jni: privacy_jni.dll
+
+privacy_jni.dll: $(objects_jni)
+	$(CC) $(LDFLAGS) $(objects_jni) $(SHARED) -o $@
+
+%.o: %.c
+	$(CC) $(PIC) $(CFLAGS) $(DB_CFLAGS) -c $< -o $@
+
+utils.c: utils.h error.h
+decrypt.c: decrypt.h utils.h error.h
+jni.c: jni.h decrypt.h utils.h error.h
+
+clean:
+	rm -f $(objects_jni) *.dll
